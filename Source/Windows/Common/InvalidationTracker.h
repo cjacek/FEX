@@ -52,12 +52,6 @@ private:
   // and any code in the range will be invalidated before protection as RWX, otherwise protects as RX if false.
   bool ProtectRWXIntervalsInternal(uint64_t Address, uint64_t Size, bool ForWriteLocked);
 
-  // Returns the correct protection for trapping (removing write) or untrapping (restoring write) an RWX interval.
-  // For DEP-promoted regions (originally non-exec), uses PAGE_READONLY/PAGE_READWRITE instead of PAGE_EXECUTE_READ/PAGE_EXECUTE_READWRITE.
-  // NOTE: Must be called with IntervalsLock held.
-  ULONG GetTrapProt(uint64_t Address) const;
-  ULONG GetUntrapProt(uint64_t Address) const;
-
   FEXCore::IntervalList<uint64_t> XIntervals;
   FEXCore::IntervalList<uint64_t> RWXIntervals;
   std::shared_mutex IntervalsLock;

@@ -17,6 +17,11 @@ InvalidationTracker::InvalidationTracker(FEXCore::Context::Context& CTX, const s
   FEX_CONFIG_OPT(SMCChecks, SMCCHECKS);
   SMCDetectionDisabled = (SMCChecks == FEXCore::Config::CONFIG_SMC_NONE);
 
+  if (!SMCDetectionDisabled) {
+    MANAGE_WRITES_TO_EXECUTABLE_MEMORY mem = {.Version = 2, .ProcessEnableWriteExceptions = 1};
+    NtSetInformationProcess(GetCurrentProcess(), ProcessManageWritesToExecutableMemory, &mem, sizeof(mem));
+  }
+
   MEMORY_BASIC_INFORMATION Info;
   uint64_t Address = 0;
 
@@ -217,13 +222,11 @@ void InvalidationTracker::ReprotectRWXIntervals(uint64_t Address, uint64_t Size)
 }
 
 bool InvalidationTracker::HandleRWXAccessViolation(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPc, uint64_t FaultAddress) {
-  const auto [NeedsInvalidate, UntrapProt] = [&](uint64_t Address) -> std::pair<bool, ULONG> {
+  bool NeedsInvalidate;
+  {
     std::shared_lock Lock(IntervalsLock);
-    if (!RWXIntervals.Query(Address).Enclosed) {
-      return {false, 0};
-    }
-    return {true, GetUntrapProt(Address)};
-  }(FaultAddress);
+    NeedsInvalidate = RWXIntervals.Query(FaultAddress).Enclosed;
+  }
 
   if (NeedsInvalidate) {
     // IntervalsLock cannot be held during invalidation
@@ -233,15 +236,27 @@ bool InvalidationTracker::HandleRWXAccessViolation(FEXCore::Core::InternalThread
       InvalidateIntervalInternalLocked(FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE);
 
       // Invalidate, then unprotect the faulting page with the compilation lock held to ensure that any racing invalidations are not dropped.
-      ULONG TmpProt;
-      void* TmpAddress = reinterpret_cast<void*>(FaultAddress);
-      SIZE_T TmpSize = 1;
-      NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, UntrapProt, &TmpProt);
+      MANAGE_WRITES_TO_EXECUTABLE_MEMORY Mem = {.Version = 2, .ThreadAllowWrites = 1};
+      NtSetInformationThread(GetCurrentThread(), ThreadManageWritesToExecutableMemory, &Mem, sizeof(Mem));
+
+      *reinterpret_cast<volatile char*>(FaultAddress) |= 0;
+
+      Mem.ThreadAllowWrites = 0;
+      NtSetInformationThread(GetCurrentThread(), ThreadManageWritesToExecutableMemory, &Mem, sizeof(Mem));
     }
     DetectMonoBackpatcherBlock(Thread, HostPc);
     return true;
   }
-  return false;
+
+  // It may be our JIT code or ARM64EC RWX page
+  MANAGE_WRITES_TO_EXECUTABLE_MEMORY Mem = {.Version = 2, .ThreadAllowWrites = 1};
+  NtSetInformationThread(GetCurrentThread(), ThreadManageWritesToExecutableMemory, &Mem, sizeof(Mem));
+
+  *reinterpret_cast<volatile char*>(FaultAddress) |= 0;
+
+  Mem.ThreadAllowWrites = 0;
+  NtSetInformationThread(GetCurrentThread(), ThreadManageWritesToExecutableMemory, &Mem, sizeof(Mem));
+  return true;
 }
 
 bool InvalidationTracker::BeginUntrackedWriteLocked(uint64_t Address, uint64_t Size) {
@@ -295,34 +310,9 @@ void InvalidationTracker::DetectMonoBackpatcherBlock(FEXCore::Core::InternalThre
 void InvalidationTracker::DisableSMCDetection() {
   std::unique_lock Lock(IntervalsLock);
   SMCDetectionDisabled = true;
-  uint64_t Address = 0;
 
-  // Reprotect all RWX intervals as writable
-  FEXCore::IntervalList<uint64_t>::QueryResult Query;
-  do {
-    Query = RWXIntervals.Query(Address);
-    if (Query.Enclosed) {
-      void* TmpAddress = reinterpret_cast<void*>(Address);
-      SIZE_T TmpSize = static_cast<SIZE_T>(Query.Size);
-      ULONG TmpProt;
-      NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, GetUntrapProt(Address), &TmpProt);
-    }
-    Address += Query.Size;
-  } while (Query.Size);
-}
-
-ULONG InvalidationTracker::GetTrapProt(uint64_t Address) const {
-  if (DEPDisabled && DEPPromotedIntervals.Query(Address).Enclosed) {
-    return PAGE_READONLY;
-  }
-  return PAGE_EXECUTE_READ;
-}
-
-ULONG InvalidationTracker::GetUntrapProt(uint64_t Address) const {
-  if (DEPDisabled && DEPPromotedIntervals.Query(Address).Enclosed) {
-    return PAGE_READWRITE;
-  }
-  return PAGE_EXECUTE_READWRITE;
+  MANAGE_WRITES_TO_EXECUTABLE_MEMORY mem = {.Version = 2, .ProcessEnableWriteExceptions = 0};
+  NtSetInformationProcess(GetCurrentProcess(), ProcessManageWritesToExecutableMemory, &mem, sizeof(mem));
 }
 
 void InvalidationTracker::InvalidateIntervalInternal(uint64_t Address, uint64_t Size) {
@@ -360,10 +350,23 @@ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t
         }
         HitRWXInterval = true;
       }
-      void* TmpAddress = reinterpret_cast<void*>(Address);
-      SIZE_T TmpSize = static_cast<SIZE_T>(std::min(End, Address + Query.Size) - Address);
-      ULONG TmpProt;
-      NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, ForWriteLocked ? GetUntrapProt(Address) : GetTrapProt(Address), &TmpProt);
+      if (ForWriteLocked) {
+        MANAGE_WRITES_TO_EXECUTABLE_MEMORY Mem = {.Version = 2, .ThreadAllowWrites = 1};
+        NtSetInformationThread(GetCurrentThread(), ThreadManageWritesToExecutableMemory, &Mem, sizeof(Mem));
+
+        uint64_t TmpEnd = std::min(End, Address + Query.Size);
+        for (uint64_t Ptr = Address; Ptr < TmpEnd; Ptr += FEXCore::Utils::FEX_PAGE_SIZE) {
+          *reinterpret_cast<volatile char*>(Ptr) |= 0;
+        }
+
+        Mem.ThreadAllowWrites = 0;
+        NtSetInformationThread(GetCurrentThread(), ThreadManageWritesToExecutableMemory, &Mem, sizeof(Mem));
+      } else {
+        MEMORY_RANGE_ENTRY Range = {.VirtualAddress = reinterpret_cast<void*>(Address),
+                                    .NumberOfBytes = std::min(End, Address + Query.Size) - Address};
+        ULONG Flag = 0;
+        NtSetInformationVirtualMemory(GetCurrentProcess(), VmPageDirtyStateInformation, 1, &Range, &Flag, sizeof(Flag));
+      }
     } else if (!Query.Size) {
       // No more regions past `Address` in the interval list
       break;

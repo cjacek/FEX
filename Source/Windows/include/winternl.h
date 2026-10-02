@@ -492,8 +492,29 @@ typedef enum _MEMORY_INFORMATION_CLASS {
 #define MEM_EXECUTE_OPTION_DISABLE_THUNK_EMULATION 0x04
 #define MEM_EXECUTE_OPTION_PERMANENT 0x08
 
+#define ProcessManageWritesToExecutableMemory (PROCESSINFOCLASS)83
+
 #define ProcessFexHardwareTso (PROCESSINFOCLASS)2000
 #define ProcessFexUnalignAtomic (PROCESSINFOCLASS)2001
+
+#define ThreadManageWritesToExecutableMemory (THREADINFOCLASS)48
+
+typedef struct _MEMORY_RANGE_ENTRY {
+  PVOID VirtualAddress;
+  SIZE_T NumberOfBytes;
+} MEMORY_RANGE_ENTRY, *PMEMORY_RANGE_ENTRY;
+
+typedef enum {
+  VmPrefetchInformation,
+  VmPagePriorityInformation,
+  VmCfgCallTargetInformation,
+  VmPageDirtyStateInformation,
+  VmImageHotPatchInformation,
+  VmPhysicalContiguityInformation,
+  VmVirtualMachinePrepopulateInformation,
+  VmRemoveFromWorkingSetInformation,
+} VIRTUAL_MEMORY_INFORMATION_CLASS,
+  *PVIRTUAL_MEMORY_INFORMATION_CLASS;
 
 typedef enum _KEY_VALUE_INFORMATION_CLASS {
   KeyValueBasicInformation,
@@ -520,6 +541,14 @@ typedef struct _MEMORY_FEX_STATS_SHM_INFORMATION {
 typedef struct _MEMORY_SECTION_NAME {
   UNICODE_STRING SectionFileName;
 } MEMORY_SECTION_NAME, *PMEMORY_SECTION_NAME;
+
+typedef struct _MANAGE_WRITES_TO_EXECUTABLE_MEMORY {
+  ULONG Version                      : 8;
+  ULONG ProcessEnableWriteExceptions : 1;
+  ULONG ThreadAllowWrites            : 1;
+  ULONG Spare                        : 22;
+  PVOID KernelWriteToExecutableSignal;
+} MANAGE_WRITES_TO_EXECUTABLE_MEMORY, *PMANAGE_WRITES_TO_EXECUTABLE_MEMORY;
 
 NTSTATUS WINAPIV DbgPrint(LPCSTR fmt, ...);
 NTSTATUS WINAPI LdrDisableThreadCalloutsForDll(HMODULE);
@@ -556,6 +585,7 @@ NTSTATUS WINAPI NtQueryVirtualMemory(HANDLE, LPCVOID, MEMORY_INFORMATION_CLASS, 
 NTSTATUS WINAPI NtRaiseException(EXCEPTION_RECORD*, CONTEXT*, BOOL);
 NTSTATUS WINAPI NtReadFile(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG, PLARGE_INTEGER, PULONG);
 NTSTATUS WINAPI NtSetContextThread(HANDLE, const CONTEXT*);
+NTSTATUS WINAPI NtSetInformationVirtualMemory(HANDLE, VIRTUAL_MEMORY_INFORMATION_CLASS, ULONG_PTR, PMEMORY_RANGE_ENTRY, PVOID, ULONG);
 NTSTATUS WINAPI NtSuspendThread(HANDLE, PULONG);
 NTSTATUS WINAPI NtTerminateProcess(HANDLE, LONG);
 NTSTATUS WINAPI NtTerminateThread(HANDLE, LONG);

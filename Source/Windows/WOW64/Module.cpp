@@ -746,8 +746,11 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
                                                        reinterpret_cast<__uint128_t*>(Context->V), &Context->Pc)) {
       return true;
     }
+  }
 
+  if (Exception->ExceptionCode == STATUS_IN_PAGE_ERROR) {
     if (Thread) {
+      uint64_t FaultAddress = Exception->ExceptionInformation[1];
       std::scoped_lock Lock(ThreadCreationMutex);
       FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
       if (InvalidationTracker->HandleRWXAccessViolation(Thread, Context->Pc, FaultAddress)) {

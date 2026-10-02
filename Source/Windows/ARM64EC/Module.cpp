@@ -786,6 +786,10 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
                                                        reinterpret_cast<__uint128_t*>(NativeContext->V), &NativeContext->Pc)) {
       return true;
     }
+  }
+
+  if (Exception->ExceptionCode == STATUS_IN_PAGE_ERROR) {
+    uint64_t FaultAddress = Exception->ExceptionInformation[1];
 
     std::scoped_lock Lock(ThreadCreationMutex);
     if (InvalidationTracker && InvalidationTracker->HandleRWXAccessViolation(Thread, NativeContext->Pc, FaultAddress)) {
