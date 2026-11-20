@@ -2,8 +2,8 @@
 
 let
   toolchain = pkgs.fetchzip {
-    url = "https://github.com/bylaws/llvm-mingw/releases/download/20250920/llvm-mingw-20250920-ucrt-ubuntu-22.04-aarch64.tar.xz";
-    sha256 = "sha256-LaojKjC8KzY+soW5u6eoDoXE3qtYk9Ejr7M3enTqRAE=";
+    url = "https://github.com/mstorsjo/llvm-mingw/releases/download/20260826/llvm-mingw-20260826-ucrt-ubuntu-22.04-aarch64.tar.xz";
+    sha256 = "sha256-TrR1zM9eXjfqO2k6UiJ+cKhq5wq6/OuezYOIfmdpnJ0=";
   };
 
   cmakeToolchainFile = pkgs.substitute {
